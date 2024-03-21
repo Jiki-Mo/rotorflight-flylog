@@ -2,9 +2,8 @@
 Release:
 v0.1 2024-01-19
 v0.2 2024-02-07
-v0.3 2024-02-13rq
+v0.3 2024-02-13
 v0.4 2024-02-22 (RF2 20240218 Version)
-v0.5 2024-03-21
 --]]
 
 --[[
@@ -20,35 +19,23 @@ AUTOROT
 BAILOUT
 ]]
 
---[[
-Redefine telemetry
-CLI:
-set crsf_gps_heading_reuse = THROTTLE
-set crsf_flight_mode_reuse = GOV_ADJFUNC
-set crsf_gps_altitude_reuse = HEADSPEED
-set crsf_gps_ground_speed_reuse = ESC_TEMP
-set crsf_gps_sats_reuse = MCU_TEMP
-save
-]]
-
 --Script information
 local name = "FlyLog"
-local LuaVersion = "v0.5"
+local LuaVersion = "v0.4"
 
 --Variable
-local CrsfField = { "RxBt", "Curr", "Alt", "Capa", "Bat%", "GSpd", "Sats", "1RSS", "2RSS", "RQly", "Hdg", "FM" }
-local FportField = { "VFAS", "Curr", "RPM1", "5250", "Fuel", "EscT", "Tmp1", "RSSI", "TRSS", "TQly", "Hdg", "FM" }
+local CrsfField = { "RxBt", "Curr", "Alt", "Capa", "Bat%", "GSpd", "Sats", "1RSS", "2RSS", "RQly", "FM" }
+local FportField = { "VFAS", "Curr", "RPM1", "5250", "Fuel", "EscT", "Tmp1", "RSSI", "TRSS", "TQly", "FM" }
 local DisplayItem = { "Voltage[V]", "Current[A]", "HSpd[rpm]", "FM:" }
 local TableFormat = { "%.1f", "%.1f", "%d", "%s" }
 local TableField = {}
 
 --Define
-local TeleItems = 12
-local FmIndex = 12
-local TableHag = { 11, 10 }
+local TeleItems = 11
+local FmIndex = 11
 local DisplayFmIndex = 4
 local LogInfoLen = 22
-local LogDataLen = 104
+local LogDataLen = 100
 --Variable
 local ModelName = ""
 local ProtocolType = 0
@@ -90,7 +77,7 @@ local RingEndFlag
 local options = {
     { "TelemetryValueColor", COLOR,  BLACK },
     { "ThrottleChannel",     SOURCE, 215 }, --CH6
-    { "LowVoltageValue_x10", VALUE,  216,  0, 550 },
+    { "LowVoltageValue",     VALUE,  22,   0, 55 },
     { "LowFuelValue",        VALUE,  0,    0, 100 }
 }
 
@@ -120,10 +107,16 @@ local function create(zone, options)
 
     --Initialize the array
     for i = 1, TeleItems - 1 do
-        ValueMinMax[i] = { 0, 0, 0 }
+        ValueMinMax[i] = {}
+        for j = 1, 3 do
+            ValueMinMax[i][j] = 0
+        end
     end
     for i = 1, TeleItems do
-        TableID[i] = { 0, 0 }
+        TableID[i] = {}
+        for j = 1, 2 do
+            TableID[i][j] = 0
+        end
     end
 
     --Protocol Type
@@ -131,22 +124,25 @@ local function create(zone, options)
     module[2] = model.getModule(1) --External
     ProtocolType = 0               --CRSF
     for m = 1, 2 do
-        if module[m] ~= nil then
-            if module[m].Type == 6 and module[m].protocol == 64 then -- MULTIMODULE D16
-                ProtocolType = 1                                     -- FPORT
-                break
+        if module[m] ~= nil and ProtocolType == 0 then
+            if module[m].Type == 6 and module[m].protocol == 64 then --MULTIMODULE D16
+                ProtocolType = 1                                     --FPORT
             end
         end
     end
 
     --Redefine fields
-    TableField = ProtocolType == 1 and FportField or CrsfField
+    if ProtocolType == 1 then --FPORT
+        TableField = FportField
+    else                      --CRSF
+        TableField = CrsfField
+    end
 
     --Get ID
     for k, v in pairs(TableField) do
-        local TableInfo = getFieldInfo(v)
-        if TableInfo ~= nil then
-            TableID[k][1] = TableInfo.id
+        local Info = getFieldInfo(v)
+        if Info ~= nil then
+            TableID[k][1] = getFieldInfo(v).id
             TableID[k][2] = true
         else
             TableID[k][1] = 0;
@@ -163,7 +159,6 @@ local function create(zone, options)
         string.format("%02d", getDateTime().mon) ..
         string.format("%02d", getDateTime().day) .. ".log"
     FilePath = "/WIDGETS/FlyLog/logs/" .. FileName
-
     local FileInfo = fstat(FilePath)
     local ReadCnt = 1
     if FileInfo ~= nil then
@@ -263,10 +258,10 @@ local function displaylog(x, y, title, message, flags)
     Pos = 13
     Len = 5
     Extract[2] = string.sub(message, Pos, Pos + Len - 1)
-    --Capa Fuel HSpd Current Power [[Voltage EscT McuT 1RSS 2RSS RQly] MAX MIN] Throttle
-    for t = 1, 18 do
+    --Capa Fuel HSpd Current Power [Voltage EscT McuT 1RSS 2RSS RQly] MAX MIN
+    for t = 1, 17 do
         Pos = Pos + Len + 1
-        if t == 2 or t == 16 or t == 17 or t == 18 then
+        if t == 2 or t == 16 or t == 17 then
             Len = 3
         elseif t == 4 then
             Len = 5
@@ -281,19 +276,19 @@ local function displaylog(x, y, title, message, flags)
         end
     end
     --Display
-    lcd.drawFilledRectangle(x, y, 400, 155, lcd.RGB(250, 250, 250))
-    lcd.drawRectangle(x, y, 400, 155, PaintColorFlag, 2)
-    lcd.drawLine(x, y + 28, x + 400 - 2, y + 28, SOLID, PaintColorFlag)
+    lcd.drawFilledRectangle(x, y, 350, 155, lcd.RGB(250, 250, 250))
+    lcd.drawRectangle(x, y, 350, 155, PaintColorFlag, 2)
+    lcd.drawLine(x, y + 28, x + 348, y + 28, SOLID, PaintColorFlag)
     lcd.drawText(x + 5, y + 5, title, PaintColorFlag)
     lcd.drawText(x + 5, y + 30,
         "Time: " .. Extract[2] .. '\n' ..
         "Capa: " .. Extract[3] .. "[mAh]\n" ..
         "Fuel: " .. Extract[4] .. "[%]\n" ..
-        "HSpd: " .. Extract[5] .. "[rpm]-" .. Extract[20] .. "[%]\n" ..
+        "HSpd: " .. Extract[5] .. "[rpm]\n" ..
         "Current: " .. Extract[6] .. "[A]\n" ..
         "Power: " .. Extract[7] .. "[W]"
         , flags)
-    lcd.drawText(x + 220, y + 30,
+    lcd.drawText(x + 175, y + 30,
         "Voltage: " .. Extract[8] .. " -> " .. Extract[9] .. "[V]\n" ..
         "EscT: " .. Extract[11] .. " -> " .. Extract[10] .. "[°C]\n" ..
         "McuT: " .. Extract[13] .. " -> " .. Extract[12] .. "[°C]\n" ..
@@ -323,8 +318,12 @@ local function refresh(widget, event, touchState)
 
     --Options
     lcd.setColor(CUSTOM_COLOR, widget.options.TelemetryValueColor)
-    SetColorFlag = lcd.getColor(CUSTOM_COLOR)
-    Protocol = ProtocolType == 1 and "[FPORT]" or "[CRSF]"
+    SetColorFlag = widget.options.TelemetryValueColor
+    if ProtocolType == 1 then
+        Protocol = "[FPORT]"
+    else
+        Protocol = "[CRSF]"
+    end
 
     --Event
     if event ~= 0 then
@@ -471,12 +470,6 @@ local function refresh(widget, event, touchState)
         end
         if TableID[k][2] then
             GetValue = getValue(TableID[k][1])
-            --CRSF
-            if ProtocolType == 0 then
-                if k == TableHag[1] then
-                    GetValue = GetValue * TableHag[2];
-                end
-            end
             ValueMinMax[k][1] = GetValue
             if InitSyncFlag then
                 ValueMinMax[k][2] = GetValue
@@ -502,20 +495,17 @@ local function refresh(widget, event, touchState)
                 end
             end
             if k < 4 and WidgetFlag then
-                lcd.drawText(xs, ys + yOffset, string.format(TableFormat[k], ValueMinMax[k][1]), DBLSIZE + SetColorFlag)  --Real time
-                lcd.drawText(xs + 85, ys + yOffset, string.format(TableFormat[k], ValueMinMax[k][2]), SetColorFlag)       --Max
+                lcd.drawText(xs, ys + yOffset, string.format(TableFormat[k], ValueMinMax[k][1]), DBLSIZE + SetColorFlag) --Real time
+                lcd.drawText(xs + 85, ys + yOffset, string.format(TableFormat[k], ValueMinMax[k][2]), SetColorFlag)      --Max
                 if k == 2 then
-                    lcd.drawText(xs + 85, ys + yOffset + 15, string.format("%dW", PowerMax[2]), SetColorFlag)             --Power
+                    lcd.drawText(xs + 85, ys + yOffset + 15, string.format("%dW", PowerMax[2]), SetColorFlag)            --Power
                 elseif k == 3 then
-                    if ProtocolType == 1 then                                                                             --FPORT
-                        lcd.drawText(xs + 85, ys + yOffset + 15, string.format("%.f%%",
-                            (getOutputValue(widget.options.ThrottleChannel - 210) + 1024) / 2048 * 100), SetColorFlag)    --Throttle [Remote control channel value]
-                    else                                                                                                  --CRSF
-                        lcd.drawText(xs + 85, ys + yOffset + 15, string.format("%d%%", ValueMinMax[11][1]), SetColorFlag) --Throttle [FC real-time value]
-                    end
+                    lcd.drawText(xs + 85, ys + yOffset + 15,
+                        string.format("%.f%%", (getOutputValue(widget.options.ThrottleChannel - 210) + 1024) / 2048 * 100),
+                        SetColorFlag) --Throttle
                 else
-                    lcd.drawText(xs + 85, ys + yOffset + 15, string.format(TableFormat[k], ValueMinMax[k][3]),
-                        SetColorFlag) --Voltage Min
+                    lcd.drawText(xs + 85, ys + yOffset + 15,
+                        string.format(TableFormat[k], ValueMinMax[k][3]), SetColorFlag) --Voltage Min
                 end
             end
         else
@@ -526,12 +516,18 @@ local function refresh(widget, event, touchState)
         ys = ys + yLineHt
     end
     --Limit RPM maximum
-    ValueMinMax[3][2] = math.min(ValueMinMax[3][2], 9999)
+    if ValueMinMax[3][2] > 9999 then
+        ValueMinMax[3][2] = 9999
+    end
 
     --Power
-    PowerMax[2] = math.min(math.floor(ValueMinMax[1][1] * ValueMinMax[2][1]), 9999)
+    PowerMax[2] = math.floor(ValueMinMax[1][1] * ValueMinMax[2][1])
     if PowerMax[1] < PowerMax[2] then
         PowerMax[1] = PowerMax[2]
+        --Limit the maximum power
+        if PowerMax[1] > 9999 then
+            PowerMax[1] = 9999
+        end
     end
 
     --Synchronize
@@ -551,8 +547,8 @@ local function refresh(widget, event, touchState)
             --Total
             TotalSecond = TotalSecond + 1
             --Warning
-            if widget.options.LowVoltageValue_x10 ~= 0 or widget.options.LowFuelValue ~= 0 then
-                if ValueMinMax[1][1] < widget.options.LowVoltageValue_x10 / 10 or ValueMinMax[5][1] < widget.options.LowFuelValue then
+            if widget.options.LowVoltageValue ~= 0 or widget.options.LowFuelValue ~= 0 then
+                if ValueMinMax[1][1] < widget.options.LowVoltageValue or ValueMinMax[5][1] < widget.options.LowFuelValue then
                     PlaySpeed = PlaySpeed + 1
                     if PlaySpeed > 2 then
                         PlaySpeed = 0
@@ -662,7 +658,7 @@ local function refresh(widget, event, touchState)
             end
             --View detailed data
             if DisplayLogFlag then
-                displaylog(40, 85, string.format(SeleNumber) .. "#  " .. string.sub(LogData[SeleNumber], 4, 11),
+                displaylog(64, 85, string.format(SeleNumber) .. "#  " .. string.sub(LogData[SeleNumber], 4, 11),
                     LogData[SeleNumber], SetColorFlag)
             end
         end
@@ -685,7 +681,7 @@ local function refresh(widget, event, touchState)
         for w = 1, FlyNumber - 1 do
             io.write(FileObj, LogData[w])
         end
-        --Write New Log [ 01|10:30:54|00:27|0017|001|1859|007.9|0178|23.1|22.5|+020|+019|+031|+031|+100|+080|+103|+079|100|099|075 ]
+        --Write New Log [ 01|10:30:54|00:27|0017|001|1859|007.9|0178|23.1|22.5|+020|+019|+031|+031|+100|+080|+103|+079|100|099 ]
         LogData[FlyNumber] =
             string.format("%02d", FlyNumber) .. '|' .. --Number
             string.format("%02d", getDateTime().hour) .. ':' ..
@@ -708,8 +704,7 @@ local function refresh(widget, event, touchState)
             string.format("%+04d", ValueMinMax[9][2]) .. '|' ..            --2RSS Max
             string.format("%+04d", ValueMinMax[9][3]) .. '|' ..            --2RSS Min
             string.format("%03d", ValueMinMax[10][2]) .. '|' ..            --RQly Max
-            string.format("%03d", ValueMinMax[10][3]) .. '|' ..            --RQly Min
-            string.format("%03d", ValueMinMax[11][2]) .. "\n"              --Throttle Max
+            string.format("%03d", ValueMinMax[10][3]) .. "\n"              --RQly Min
         io.write(FileObj, LogData[FlyNumber])
         io.close(FileObj)
         --Data writing completed
