@@ -1,11 +1,14 @@
 --[[
+FlyLog lua by FlyDragon Mo
 Release:
 v0.1 2024-01-19
 v0.2 2024-02-07
-v0.3 2024-02-13rq
+v0.3 2024-02-13
 v0.4 2024-02-22 (RF2 20240218 Version)
 v0.5 2024-03-21
 v0.6 2024-03-31
+v0.7 2024-05-30
+v0.8 2024-06-22
 --]]
 
 --[[
@@ -22,8 +25,33 @@ BAILOUT
 ]]
 
 --[[
+crsf_flight_mode_reuse = NONE
+Allowed values: NONE, GOVERNOR, HEADSPEED, THROTTLE, ESC_TEMP, MCU_TEMP, MCU_LOAD, SYS_LOAD, RT_LOAD, BEC_VOLTAGE, BUS_VOLTAGE, MCU_VOLTAGE, ADJFUNC, GOV_ADJFUNC
+
+crsf_att_pitch_reuse = NONE
+Allowed values: NONE, THROTTLE, ESC_TEMP, MCU_TEMP, MCU_LOAD, SYS_LOAD, RT_LOAD, BEC_VOLTAGE, BUS_VOLTAGE, MCU_VOLTAGE
+
+crsf_att_roll_reuse = NONE
+Allowed values: NONE, THROTTLE, ESC_TEMP, MCU_TEMP, MCU_LOAD, SYS_LOAD, RT_LOAD, BEC_VOLTAGE, BUS_VOLTAGE, MCU_VOLTAGE
+
+crsf_att_yaw_reuse = NONE
+Allowed values: NONE, THROTTLE, ESC_TEMP, MCU_TEMP, MCU_LOAD, SYS_LOAD, RT_LOAD, BEC_VOLTAGE, BUS_VOLTAGE, MCU_VOLTAGE
+
+crsf_gps_heading_reuse = NONE
+Allowed values: NONE, HEADSPEED, THROTTLE, ESC_TEMP, MCU_TEMP, MCU_LOAD, SYS_LOAD, RT_LOAD
+
+crsf_gps_ground_speed_reuse = NONE
+Allowed values: NONE, HEADSPEED, THROTTLE, ESC_TEMP, MCU_TEMP, MCU_LOAD, SYS_LOAD, RT_LOAD
+
+crsf_gps_altitude_reuse = NONE
+Allowed values: NONE, HEADSPEED, THROTTLE, ESC_TEMP, MCU_TEMP, MCU_LOAD, SYS_LOAD, RT_LOAD
+
+crsf_gps_sats_reuse = NONE
+Allowed values: NONE, ESC_TEMP, MCU_TEMP, PROFILE, RATE_PROFILE, LED_PROFILE
+
 Redefine telemetry
 CLI:
+set crsf_att_pitch_reuse = BEC_VOLTAGE
 set crsf_gps_heading_reuse = THROTTLE
 set crsf_flight_mode_reuse = GOV_ADJFUNC
 set crsf_gps_altitude_reuse = HEADSPEED
@@ -34,26 +62,28 @@ save
 
 --Script information
 local NAME = "FlyLog"
-local VERSION = "v0.6"
+local VERSION = "v0.8"
 
 --Variable
-local crsf_field = { "RxBt", "Curr", "Alt", "Capa", "Bat%", "GSpd", "Sats", "1RSS", "2RSS", "RQly", "Hdg", "FM" }
-local fport_field = { "VFAS", "Curr", "RPM1", "5250", "Fuel", "EscT", "Tmp1", "RSSI", "TRSS", "TQly", "Hdg", "FM" }
-local display_list = { "Voltage[V]", "Current[A]", "HSpd[rpm]", "FM:" }
+local crsf_field = { "RxBt", "Curr", "Alt", "Capa", "Bat%", "GSpd", "Sats", "1RSS", "2RSS", "RQly", "Hdg", "Ptch", "FM" }
+local fport_field = { "VFAS", "Curr", "RPM1", "5250", "Fuel", "EscT", "Tmp1", "RSSI", "TRSS", "TQly", "Hdg", "RxBt", "FM" }
+local display_list = { "Battery[V]", "Current[A]", "HSpd[rpm]", "FM:" }
+local voltage_list = { "Battery[V]", "Bec[V]" }
 local data_format = { "%.1f", "%.1f", "%d", "%s" }
 local data_field = {}
 
 --Define
-local TELE_ITEMS = 12
-local FM_INDEX = 12
+local TELE_ITEMS = 13
+local FM_INDEX = 13
 local DISP_FM_INDEX = 4
 local LOG_INFO_LEN = 22
-local LOG_DATA_LEN = 104
+local LOG_DATA_LEN = 115
 --Variable
 local model_name = ""
 local protocol_type = 0
 local value_min_max = {}
 local data_hag = { 11, 10 }
+local data_ptch = { 12, 4 }
 local power_max = { 0, 0 }
 local capa_start = 0
 local fuel_start = 0
@@ -81,18 +111,21 @@ local paint_color_flag = BLACK
 local set_color_flag
 local batter_on_flag
 local init_sync_flag
+local sync_end_flag
 local spoolup_flag
 local display_log_flag
 local write_en_flag
 local sliding_flag
 local ring_start_flag
 local ring_end_flag
+local alternate_flag
 
 local options = {
     { "TelemetryValueColor", COLOR,  BLACK },
     { "ThrottleChannel",     SOURCE, 215 }, --CH6
     { "LowVoltageValue_x10", VALUE,  216,  0, 550 },
-    { "LowFuelValue",        VALUE,  0,    0, 100 }
+    { "LowFuelValue",        VALUE,  0,    0, 100 },
+    { "VoltageDisplayMode",  VALUE,  0,    0, 2 }
 }
 
 --create
@@ -116,6 +149,7 @@ local function create(zone, options)
     sliding_flag = false
     ring_start_flag = false
     ring_end_flag = false
+    alternate_flag = false
 
     --Model Name
     model_name = model.getInfo().name
@@ -287,40 +321,42 @@ local function draw_log_content(xs, ys, title, message, flags)
     index = 13
     length = 5
     extract[2] = string.sub(message, index, index + length - 1)
-    --Capa Fuel HSpd Current Power [[Voltage EscT McuT 1RSS 2RSS RQly] MAX MIN] Throttle
-    for t = 1, 18 do
+    --Capa Fuel HSpd Current Power [[Battery ESC MCU 1RSS 2RSS RQly] MAX MIN] Throttle BEC[MAX MIN]
+    for t = 1, 20 do
         index = index + length + 1
         if t == 2 or t == 16 or t == 17 or t == 18 then
             length = 3
-        elseif t == 4 then
+        elseif t == 4 or t == 5 then
             length = 5
         else
             length = 4
         end
         value = tonumber(string.sub(message, index, index + length - 1))
-        if t == 4 or t == 6 or t == 7 then
+        if t == 4 or t == 6 or t == 7 or t == 19 or t == 20 then
             extract[t + 2] = string.format("%.1f", value)
         else
             extract[t + 2] = string.format("%d", value)
         end
     end
     --Display
-    draw_rounded_rectangle(xs, ys, 400 - 1, 155 - 1, 2, paint_color_flag)
+    draw_rounded_rectangle(xs, ys, 400 - 1, 175 - 1, 2, paint_color_flag) --Line 20
     lcd.drawLine(xs, ys + 28, xs + 400 - 2, ys + 28, SOLID, paint_color_flag)
-    lcd.drawLine(xs + 200, ys + 28, xs + 200, ys + 155 - 2, SOLID, paint_color_flag)
+    lcd.drawLine(xs + 200, ys + 28, xs + 200, ys + 175 - 2, SOLID, paint_color_flag)
     lcd.drawText(xs + 5, ys + 5, title, paint_color_flag)
     lcd.drawText(xs + 5, ys + 30,
         "Time: " .. extract[2] .. '\n' ..
         "Capa: " .. extract[3] .. "[mAh]\n" ..
         "Fuel: " .. extract[4] .. "[%]\n" ..
-        "HSpd: " .. extract[5] .. "[rpm]-" .. extract[20] .. "[%]\n" ..
+        "HSpd: " .. extract[5] .. "[rpm]\n" ..
+        "Throttle: " .. extract[20] .. "[%]\n" ..
         "Current: " .. extract[6] .. "[A]\n" ..
         "Power: " .. extract[7] .. "[W]"
         , flags)
     lcd.drawText(xs + 205, ys + 30,
-        "Voltage: " .. extract[8] .. " -> " .. extract[9] .. "[V]\n" ..
-        "EscT: " .. extract[11] .. " -> " .. extract[10] .. "[°C]\n" ..
-        "McuT: " .. extract[13] .. " -> " .. extract[12] .. "[°C]\n" ..
+        "Battery: " .. extract[8] .. " -> " .. extract[9] .. "[V]\n" ..
+        "BEC: " .. extract[22] .. " -> " .. extract[21] .. "[V]\n" ..
+        "ESC: " .. extract[11] .. " -> " .. extract[10] .. "[°C]\n" ..
+        "MCU: " .. extract[13] .. " -> " .. extract[12] .. "[°C]\n" ..
         data_field[8] .. ": " .. extract[14] .. " -> " .. extract[15] .. "[dB]\n" ..
         data_field[9] .. ": " .. extract[16] .. " -> " .. extract[17] .. "[dB]\n" ..
         data_field[10] .. ": " .. extract[18] .. " -> " .. extract[19] .. "[%]"
@@ -331,20 +367,32 @@ end
 local function refresh(widget, event, touchState)
     local y_offset = 13
     local line_height = 48
-    local xs = widget.zone.x --0
-    local ys = widget.zone.y --0
-    local xe = widget.zone.w --392
-    local ye = widget.zone.h --168
+    local xs = 0
+    local ys = 0
+    local xe = widget.zone.w --TX16S[392] T5[426]
+    local ye = widget.zone.h --TX16S[168] T5[220]
+    local xsp = 0
+    local ysp = 0
     local get_value
     local widget_flag = false
     local touch_key
     local protocol_str
 
     --Layout Mode
-    if xe < 480 and ye < 272 then --Widget 392x168 Full 480x272
+    if xe < 480 and ye < 272 then --TX16S[Full 480x272] T5[480x320]
         widget_flag = true
         display_log_flag = false
     end
+
+    --Radio type
+    if widget_flag and widget.zone.h > 168 then
+        xsp = (widget.zone.w - 392) / 2
+        ysp = (widget.zone.h - 168) / 2
+    end
+
+    --Position adjustment
+    xs = xsp
+    ys = ysp
 
     --Options
     lcd.setColor(CUSTOM_COLOR, widget.options.TelemetryValueColor)
@@ -420,9 +468,10 @@ local function refresh(widget, event, touchState)
                 wait_count = 0
                 sync_fuel_value = 0
                 play_speed = 0
-                time_os = getTime()
-                init_sync_flag = false
+                time_os = getTime() --10ms
                 batter_on_flag = false
+                init_sync_flag = false
+                sync_end_flag = false
                 spoolup_flag = false
                 if ring_end_flag then
                     ring_start_flag = false
@@ -445,7 +494,7 @@ local function refresh(widget, event, touchState)
                 --Control
                 if get_value == "DISARMED" or get_value == 1 then
                     if batter_on_flag == false then
-                        if getTime() - time_os > 350 then
+                        if getTime() - time_os > 350 then --350*10=3500ms
                             time_os = getTime()
                             init_sync_flag = true
                             batter_on_flag = true
@@ -482,11 +531,33 @@ local function refresh(widget, event, touchState)
         end
     end
 
+    --Voltage display mode
+    if sync_end_flag then
+        if getTime() - time_os > 100 then --100*10=1000ms
+            time_os = getTime()
+            if widget.options.VoltageDisplayMode == 1 then
+                alternate_flag = false
+                display_list[1] = voltage_list[1]
+            elseif widget.options.VoltageDisplayMode == 2 then
+                alternate_flag = true
+                display_list[1] = voltage_list[2]
+            else
+                if alternate_flag then
+                    alternate_flag = false
+                    display_list[1] = voltage_list[1]
+                else
+                    alternate_flag = true
+                    display_list[1] = voltage_list[2]
+                end
+            end
+        end
+    end
+
     --Telemetry data
     for k = 1, TELE_ITEMS - 1 do
         if k == 1 then
-            xs = 150
-            ys = 20
+            xs = 150 + xsp
+            ys = 20 + ysp
         end
         if k < 4 and widget_flag then
             lcd.drawText(xs, ys, display_list[k], paint_color_flag)
@@ -497,6 +568,9 @@ local function refresh(widget, event, touchState)
             if protocol_type == 0 then
                 if k == data_hag[1] then
                     get_value = get_value * data_hag[2];
+                end
+                if k == data_ptch[1] then
+                    get_value = get_value * data_ptch[2];
                 end
             end
             value_min_max[k][1] = get_value
@@ -523,19 +597,33 @@ local function refresh(widget, event, touchState)
                     end
                 end
             end
+            --Voltage display mode
+            --Display Real time
             if k < 4 and widget_flag then
-                lcd.drawText(xs, ys + y_offset, string.format(data_format[k], value_min_max[k][1]), DBLSIZE + set_color_flag)                                                         --Real time
-                lcd.drawText(xs + 85, ys + y_offset, string.format(data_format[k], value_min_max[k][2]), set_color_flag)                                                              --Max
-                if k == 2 then
-                    lcd.drawText(xs + 85, ys + y_offset + 15, string.format("%dW", power_max[2]), set_color_flag)                                                                     --Power
-                elseif k == 3 then
-                    if protocol_type == 1 then                                                                                                                                        --FPORT
-                        lcd.drawText(xs + 85, ys + y_offset + 15, string.format("%.f%%", (getOutputValue(widget.options.ThrottleChannel - 210) + 1024) / 2048 * 100), set_color_flag) --Throttle [Remote control channel value]
-                    else                                                                                                                                                              --CRSF
-                        lcd.drawText(xs + 85, ys + y_offset + 15, string.format("%d%%", value_min_max[11][1]), set_color_flag)                                                        --Throttle [FC real-time value]
+                if k == 1 then
+                    if alternate_flag then
+                        lcd.drawText(xs, ys + y_offset, string.format(data_format[k], value_min_max[12][1]), DBLSIZE + set_color_flag) --Bec Real time
+                        lcd.drawText(xs + 85, ys + y_offset, string.format(data_format[k], value_min_max[12][2]), set_color_flag)      --Bec Max
+                        lcd.drawText(xs + 85, ys + y_offset + 15, string.format(data_format[k], value_min_max[12][3]), set_color_flag) --Bec Min
+                    else
+                        lcd.drawText(xs, ys + y_offset, string.format(data_format[k], value_min_max[k][1]), DBLSIZE + set_color_flag)  --Battery Real time
+                        lcd.drawText(xs + 85, ys + y_offset, string.format(data_format[k], value_min_max[k][2]), set_color_flag)       --Battery Max
+                        lcd.drawText(xs + 85, ys + y_offset + 15, string.format(data_format[k], value_min_max[k][3]), set_color_flag)  --Battery Min
                     end
                 else
-                    lcd.drawText(xs + 85, ys + y_offset + 15, string.format(data_format[k], value_min_max[k][3]), set_color_flag) --Voltage Min
+                    lcd.drawText(xs, ys + y_offset, string.format(data_format[k], value_min_max[k][1]), DBLSIZE + set_color_flag)                                                         --Real time
+                    lcd.drawText(xs + 85, ys + y_offset, string.format(data_format[k], value_min_max[k][2]), set_color_flag)                                                              --Max
+                    if k == 2 then
+                        lcd.drawText(xs + 85, ys + y_offset + 15, string.format("%dW", power_max[2]), set_color_flag)                                                                     --Power
+                    elseif k == 3 then
+                        if protocol_type == 1 then                                                                                                                                        --FPORT
+                            lcd.drawText(xs + 85, ys + y_offset + 15, string.format("%.f%%", (getOutputValue(widget.options.ThrottleChannel - 210) + 1024) / 2048 * 100), set_color_flag) --Throttle [Remote control channel value]
+                        else                                                                                                                                                              --CRSF
+                            lcd.drawText(xs + 85, ys + y_offset + 15, string.format("%d%%", value_min_max[11][1]), set_color_flag)                                                        --Throttle [FC real-time value]
+                        end
+                    else
+                        lcd.drawText(xs + 85, ys + y_offset + 15, string.format(data_format[k], value_min_max[k][3]), set_color_flag) --Min
+                    end
                 end
             end
         else
@@ -549,15 +637,17 @@ local function refresh(widget, event, touchState)
     value_min_max[3][2] = math.min(value_min_max[3][2], 9999)
 
     --Power
-    power_max[2] = math.min(math.floor(value_min_max[1][1] * value_min_max[2][1]), 9999)
+    power_max[2] = math.min(math.floor(value_min_max[1][1] * value_min_max[2][1]), 99999)
     if power_max[1] < power_max[2] then
         power_max[1] = power_max[2]
     end
 
     --Synchronize
     if init_sync_flag then
-        if getTime() - time_os > 1500 then
+        if getTime() - time_os > 1000 then --1000*10=10000ms
+            time_os = getTime()
             init_sync_flag = false
+            sync_end_flag = true
         end
     end
 
@@ -595,13 +685,13 @@ local function refresh(widget, event, touchState)
     seconds[2] = string.format("%02d", total_second % 3600 % 60)
 
     --Display mode
-    if widget_flag then --Widget 392x168
-        xs = widget.zone.x
-        ys = widget.zone.y
+    if widget_flag then --Widget
+        xs = xsp
+        ys = ysp
         --Dividing line
-        lcd.drawLine(xs + 145, ys + 66, xe, ys + 66, SOLID, paint_color_flag)
-        lcd.drawLine(xs + 145, ys + 66 + line_height, xe, ys + 66 + line_height, SOLID, paint_color_flag)
-        lcd.drawLine(xs + 285, ys + 20, xs + 285, ye - 6, SOLID, paint_color_flag)
+        lcd.drawLine(xs + 145, ys + 66, xs + 392, ys + 66, SOLID, paint_color_flag)                             ---
+        lcd.drawLine(xs + 145, ys + 66 + line_height, xs + 392, ys + 66 + line_height, SOLID, paint_color_flag) ---
+        lcd.drawLine(xs + 285, ys + 20, xs + 285, ys + 168, SOLID, paint_color_flag)                            --|
 
         --Fuel Percentage
         if ring_start_flag and ring_end_flag == false then
@@ -624,8 +714,9 @@ local function refresh(widget, event, touchState)
         fuel_percentage(xs + 70, ys + 90, value_min_max[4][1], ring_data)
 
         --Timer 48x112
-        xs = 280
-        ys = 20
+        xs = 280 + xsp
+        ys = 20 + ysp
+
         --T1
         lcd.drawText(xs + 12, ys, "T1", paint_color_flag)
         lcd.drawText(xs + 45, ys, "M", paint_color_flag)
@@ -650,7 +741,7 @@ local function refresh(widget, event, touchState)
         ys = ys + line_height - 18
         lcd.drawText(xs + 20, ys, string.format("%02d", fly_number), XXLSIZE + set_color_flag)
         lcd.drawText(xs + 45 + 53, ys + 18, "N", paint_color_flag)
-    else --Full 480x272
+    else --Full
         --Title
         lcd.drawText(12, 2,
             file_name .. "  " ..
@@ -664,7 +755,7 @@ local function refresh(widget, event, touchState)
             ys = 25
             --View the log contents
             if display_log_flag then
-                draw_log_content(40, 58, string.format(sele_number) .. "#  " .. string.sub(log_data[sele_number], 4, 11), log_data[sele_number], set_color_flag)
+                draw_log_content(40, 55, string.format(sele_number) .. "#  " .. string.sub(log_data[sele_number], 4, 11), log_data[sele_number], set_color_flag)
             else
                 --Log menu
                 for m = 0, fly_number - 1 do
@@ -699,7 +790,7 @@ local function refresh(widget, event, touchState)
         for w = 1, fly_number - 1 do
             io.write(file_obj, log_data[w])
         end
-        --Write New Log [ 10|16:20:36|04:46|4533|087|2289|159.9|3293|24.9|20.2|+099|+033|+045|+043|-032|-072|-030|-084|100|096|100 ]
+        --Write New Log [ 10|16:20:36|04:46|4533|087|2289|159.9|10295|24.9|20.2|+099|+033|+045|+043|-032|-072|-030|-084|100|096|100|12.1|07.4 ]
         log_data[fly_number] =
             string.format("%02d", fly_number) .. '|' .. --Number
             string.format("%02d", getDateTime().hour) .. ':' ..
@@ -710,20 +801,22 @@ local function refresh(widget, event, touchState)
             string.format("%03d", fuel_start - value_min_max[5][1]) .. '|' .. --Fuel used
             string.format("%04d", value_min_max[3][2]) .. '|' ..              --HSpd Max
             string.format("%05.1f", value_min_max[2][2]) .. '|' ..            --Current Max
-            string.format("%04d", power_max[1]) .. '|' ..                     --Power Max
-            string.format("%04.1f", value_min_max[1][2]) .. '|' ..            --Voltage Max
-            string.format("%04.1f", value_min_max[1][3]) .. '|' ..            --Voltage Min
-            string.format("%+04d", value_min_max[6][2]) .. '|' ..             --EscT Max
-            string.format("%+04d", value_min_max[6][3]) .. '|' ..             --EscT Min
-            string.format("%+04d", value_min_max[7][2]) .. '|' ..             --McuT Max
-            string.format("%+04d", value_min_max[7][3]) .. "|" ..             --EcuT Min
+            string.format("%05d", power_max[1]) .. '|' ..                     --Power Max
+            string.format("%04.1f", value_min_max[1][2]) .. '|' ..            --Battery Max
+            string.format("%04.1f", value_min_max[1][3]) .. '|' ..            --Battery Min
+            string.format("%+04d", value_min_max[6][2]) .. '|' ..             --ESC Max
+            string.format("%+04d", value_min_max[6][3]) .. '|' ..             --ESC Min
+            string.format("%+04d", value_min_max[7][2]) .. '|' ..             --MCU Max
+            string.format("%+04d", value_min_max[7][3]) .. "|" ..             --MCU Min
             string.format("%+04d", value_min_max[8][2]) .. '|' ..             --1RSS Max
             string.format("%+04d", value_min_max[8][3]) .. '|' ..             --1RSS Min
             string.format("%+04d", value_min_max[9][2]) .. '|' ..             --2RSS Max
             string.format("%+04d", value_min_max[9][3]) .. '|' ..             --2RSS Min
             string.format("%03d", value_min_max[10][2]) .. '|' ..             --RQly Max
             string.format("%03d", value_min_max[10][3]) .. '|' ..             --RQly Min
-            string.format("%03d", value_min_max[11][2]) .. "\n"               --Throttle Max
+            string.format("%03d", value_min_max[11][2]) .. '|' ..             --Throttle Max
+            string.format("%04.1f", value_min_max[12][3]) .. '|' ..           --BEC Max
+            string.format("%04.1f", value_min_max[12][2]) .. "\n"             --BEC Min
         io.write(file_obj, log_data[fly_number])
         io.close(file_obj)
         --Data writing completed
