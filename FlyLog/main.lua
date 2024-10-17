@@ -9,14 +9,14 @@ v0.5 2024-03-21
 v0.6 2024-03-31
 v0.7 2024-05-30
 v0.8 2024-06-22
-v0.9 2024-10-16 (RF2.1)
+v0.9 2024-10-17 (RF2.1)
 --]]
 
 --[[
 Telemetry
 CLI:
 set crsf_telemetry_mode = CUSTOM
-set crsf_telemetry_sensors = 42,43,46,5,6,60,15,50,52,93,90,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+set crsf_telemetry_sensors = 3,43,4,5,6,60,15,50,52,93,90,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 ]]
 
 --Script information
@@ -24,7 +24,7 @@ local NAME = "FlyLog"
 local VERSION = "v0.9"
 
 --Variable
-local crsf_field = { "Vesc", "Iesc", "Hspd", "Capa", "Bat%", "Tesc", "Tmcu", "1RSS", "2RSS", "RQly", "Thr", "Vbec", "ARM", "Gov" }
+local crsf_field = { "Vbat", "Curr", "Hspd", "Capa", "Bat%", "Tesc", "Tmcu", "1RSS", "2RSS", "RQly", "Thr", "Vbec", "ARM", "Gov" }
 local fport_field = { "VFAS", "Curr", "RPM1", "5250", "Fuel", "EscT", "Tmp1", "RSSI", "TRSS", "TQly", "Hdg", "RxBt", "FM", "Gov" }
 local display_list = { "Battery[V]", "Current[A]", "HSpd[rpm]", "ARM:", "GOV:" }
 local voltage_list = { "Battery[V]", "Bec[V]" }
